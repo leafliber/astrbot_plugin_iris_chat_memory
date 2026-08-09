@@ -269,6 +269,50 @@ class TestL2MemoryAdapter:
         assert not result
 
     @pytest.mark.asyncio
+    async def test_migrate_on_model_change_when_unavailable(self, mock_faiss_adapter):
+        """初始化阶段尚未标记可用时，模型迁移仍应保留全部记忆。"""
+        adapter = mock_faiss_adapter
+        adapter._find_similar_unlocked = Mock(return_value=None)
+        adapter._embed = AsyncMock(return_value=[[0.1] * 8])
+
+        for i in range(3):
+            await adapter.add_memory(f"旧记忆 {i}", metadata={"group_id": "g1"})
+        old_count = adapter._count_db()
+        assert old_count == 3
+
+        adapter._is_available = False
+        adapter._db = None
+        adapter._index = None
+        new_model = "provider:/qwen3-embedding:4b"
+        new_dim = 4
+        adapter._actual_embedding_model = new_model
+        adapter._embedding_dimensions = new_dim
+
+        def make_mock_index(dim):
+            index = Mock()
+            index.ntotal = 0
+            index.d = dim
+
+            def fake_add(vectors, ids):
+                index.ntotal += len(ids)
+
+            index.add_with_ids = fake_add
+            index.remove_ids = Mock()
+            return index
+
+        adapter._create_index = Mock(side_effect=make_mock_index)
+        adapter._embed = AsyncMock(return_value=[[0.2] * new_dim])
+
+        ok = await adapter._migrate_on_model_change(new_model, new_dim)
+
+        assert ok is True
+        assert adapter._count_db() == old_count
+        meta = adapter._load_meta()
+        assert meta["embedding_model"] == new_model
+        assert meta["embedding_dimensions"] == new_dim
+        assert adapter._is_available is True
+
+    @pytest.mark.asyncio
     async def test_update_access(self, mock_faiss_adapter):
         """测试更新访问信息"""
         adapter = mock_faiss_adapter
@@ -454,6 +498,48 @@ class TestL2MemoryAdapter:
         assert 0 not in adapter._free_list
         assert adapter._count_db() == 2
 
+    @pytest.mark.asyncio
+    async def test_sparse_index_allocates_after_max_id(self, mock_faiss_adapter):
+        """free-list 丢失时不能用 ntotal 覆盖稀疏索引中的现有 ID。"""
+        adapter = mock_faiss_adapter
+        adapter._upsert_db(0, "mem_0", "记忆0", {}, persona_id="default")
+        adapter._upsert_db(2, "mem_2", "记忆2", {}, persona_id="default")
+        adapter._index.ntotal = 2
+        adapter._free_list = []
+        adapter._find_similar_unlocked = Mock(return_value=None)
+        adapter._embed = AsyncMock(return_value=[[0.1] * 8])
+
+        memory_id = await adapter.add_memory("记忆3")
+
+        row = adapter._db.execute(
+            "SELECT faiss_idx FROM memories WHERE memory_id = ?", (memory_id,)
+        ).fetchone()
+        assert row == (3,)
+        assert adapter._count_db() == 3
+
+    def test_find_similar_scans_past_other_persona(
+        self, mock_faiss_adapter, mock_config
+    ):
+        """最相似项属于其他人格时，仍应找到当前人格的重复项。"""
+        adapter = mock_faiss_adapter
+        adapter._upsert_db(0, "mem_other", "相同内容", {}, persona_id="other")
+        adapter._upsert_db(1, "mem_target", "相同内容", {}, persona_id="target")
+        adapter._index.ntotal = 2
+        adapter._index.search = Mock(
+            return_value=(
+                np.array([[0.99, 0.95]], dtype=np.float32),
+                np.array([[0, 1]], dtype=np.int64),
+            )
+        )
+
+        with patch(
+            "iris_memory.l2_memory.adapter.get_config", return_value=mock_config
+        ):
+            memory_id = adapter._find_similar_unlocked(
+                np.array([[0.1] * 8], dtype=np.float32), persona_id="target"
+            )
+
+        assert memory_id == "mem_target"
 
     @pytest.mark.asyncio
     async def test_batch_retrieve_by_ids(self, mock_faiss_adapter, mock_config):

@@ -475,6 +475,24 @@ class TestSegmentedMessageQueue:
         assert removed == 3
         assert all(msg.source != "user_A" for msg in queue.all_messages)
 
+    def test_remove_user_messages_never_makes_tokens_negative(self):
+        queue = SegmentedMessageQueue(group_id="g1")
+        queue.add_message(
+            ContextMessage(
+                role="user",
+                content="测试",
+                timestamp=datetime.now(),
+                token_count=2,
+                source="user_A",
+            )
+        )
+        # 模拟旧版本持久化数据中 token 统计与消息明细不一致。
+        queue.total_tokens = 1
+
+        queue.remove_user_messages("user_A")
+
+        assert queue.total_tokens == 0
+
     def test_remove_messages(self):
         queue = SegmentedMessageQueue(
             group_id="g1", segment_1_length=2, segment_3_length=2, total_length=8

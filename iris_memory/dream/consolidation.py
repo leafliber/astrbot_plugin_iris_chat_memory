@@ -277,40 +277,48 @@ class ConsolidationPhase:
         max_confidence = max(e.metadata.get("confidence", 0.5) for e in entries)
         merged_from = ",".join(e.id for e in entries)
 
-        await l2_adapter.delete_entries(ids_to_delete)
+        # 只有所有来源都明确属于同一用户时，合并结果才能继承该主体。
+        user_ids = {
+            e.metadata.get("user_id") for e in entries if e.metadata.get("user_id")
+        }
+        active_users_set: set[str] = set()
+        for entry in entries:
+            active_users = entry.metadata.get("active_users")
+            if isinstance(active_users, str):
+                active_users_set.update(
+                    user_id.strip()
+                    for user_id in active_users.split(",")
+                    if user_id.strip()
+                )
 
+        metadata = {
+            "group_id": group_id,
+            "confidence": max_confidence,
+            "timestamp": datetime.now().isoformat(),
+            "merged_from": merged_from,
+        }
+        if len(user_ids) == 1:
+            metadata["user_id"] = user_ids.pop()
+        else:
+            metadata["subjectless"] = True
+        if active_users_set:
+            metadata["active_users"] = ",".join(sorted(active_users_set))
+
+        # 先写新记忆，成功后再删旧记忆，避免写入失败造成不可恢复的数据丢失。
         new_id = await l2_adapter.add_memory(
             current_content,
-            metadata={
-                "group_id": group_id,
-                "confidence": max_confidence,
-                "timestamp": datetime.now().isoformat(),
-                "merged_from": merged_from,
-            },
+            metadata=metadata,
             skip_dedup=True,
             persona_id=persona_id,
         )
 
         if new_id:
+            await l2_adapter.delete_entries(ids_to_delete)
             deleted_count = len(ids_to_delete)
             logger.info(f"已合并 {len(entries)} 条记忆 -> {new_id}")
             return 1, deleted_count
         else:
-            logger.warning("合并记忆存储失败，尝试回滚原记忆")
-            rollback_count = 0
-            for entry in entries:
-                try:
-                    rid = await l2_adapter.add_memory(
-                        entry.content,
-                        metadata=entry.metadata,
-                        skip_dedup=True,
-                        persona_id=persona_id,
-                    )
-                    if rid:
-                        rollback_count += 1
-                except Exception as re:
-                    logger.error(f"回滚记忆 {entry.id} 失败：{re}")
-            logger.info(f"回滚完成：恢复 {rollback_count}/{len(entries)} 条记忆")
+            logger.warning("合并记忆存储失败，原始记忆未删除，保留原样")
             return 0, 0
 
     async def _merge_memories(
@@ -322,7 +330,7 @@ class ConsolidationPhase:
 记忆1：{content1}
 记忆2：{content2}
 
-要求：合并重复信息，保留独特细节，时间冲突保留更近期的。仅输出合并后的内容。
+要求：合并重复信息，保留独特细节，时间冲突保留更近期的；必须保留记忆的主体（是谁的偏好/行为），禁止写成无主体的表述。仅输出合并后的内容。
 
 合并后："""
 

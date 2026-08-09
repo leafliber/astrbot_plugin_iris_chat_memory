@@ -106,3 +106,76 @@ class TestConsolidationPhase:
         result = await phase._merge_memories("记忆1", "记忆2", llm)
 
         assert result is None
+
+    @staticmethod
+    def _make_entry(entry_id, content, metadata):
+        entry = Mock()
+        entry.id = entry_id
+        entry.content = content
+        entry.metadata = metadata
+        return entry
+
+    @staticmethod
+    def _make_l2(add_result="merged_id"):
+        l2 = Mock()
+        l2.add_memory = AsyncMock(return_value=add_result)
+        l2.delete_entries = AsyncMock(return_value=True)
+        return l2
+
+    @pytest.mark.asyncio
+    async def test_merge_group_writes_before_deleting(self, phase):
+        entries = [
+            self._make_entry("e1", "张三喜欢孙权", {"user_id": "u1"}),
+            self._make_entry("e2", "张三偏爱孙权", {"user_id": "u1"}),
+        ]
+        l2 = self._make_l2(add_result=None)
+        llm = Mock()
+        llm.generate_direct = AsyncMock(return_value="张三喜欢孙权")
+
+        merged, deleted = await phase._merge_group(entries, l2, llm)
+
+        assert (merged, deleted) == (0, 0)
+        l2.delete_entries.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_merge_group_preserves_single_user_id(self, phase):
+        entries = [
+            self._make_entry(
+                "e1",
+                "张三喜欢孙权",
+                {"user_id": "u1", "active_users": "u1,u2", "confidence": 0.8},
+            ),
+            self._make_entry(
+                "e2",
+                "张三偏爱孙权",
+                {"user_id": "u1", "active_users": "u2", "confidence": 0.7},
+            ),
+        ]
+        l2 = self._make_l2()
+        llm = Mock()
+        llm.generate_direct = AsyncMock(return_value="张三喜欢孙权")
+
+        merged, deleted = await phase._merge_group(entries, l2, llm)
+
+        assert (merged, deleted) == (1, 2)
+        metadata = l2.add_memory.call_args.kwargs["metadata"]
+        assert metadata["user_id"] == "u1"
+        assert metadata["active_users"] == "u1,u2"
+        assert "subjectless" not in metadata
+        l2.delete_entries.assert_awaited_once_with(["e1", "e2"])
+
+    @pytest.mark.asyncio
+    async def test_merge_group_marks_conflicting_users_subjectless(self, phase):
+        entries = [
+            self._make_entry("e1", "张三喜欢孙权", {"user_id": "u1"}),
+            self._make_entry("e2", "李四喜欢孙权", {"user_id": "u2"}),
+        ]
+        l2 = self._make_l2()
+        llm = Mock()
+        llm.generate_direct = AsyncMock(return_value="张三和李四都喜欢孙权")
+
+        await phase._merge_group(entries, l2, llm)
+
+        metadata = l2.add_memory.call_args.kwargs["metadata"]
+        assert "user_id" not in metadata
+        assert metadata["subjectless"] is True

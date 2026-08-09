@@ -968,6 +968,7 @@ class L1Buffer(Component):
                 )
 
             memory_ids = []
+            written_confidences: list[str] = []
             quality_filtered = 0
             for item in filtered_items:
                 content = item.get("content", "")
@@ -1018,17 +1019,14 @@ class L1Buffer(Component):
                 )
                 if memory_id:
                     memory_ids.append(memory_id)
+                    written_confidences.append(confidence_str)
 
             if memory_ids:
                 high_count = sum(
-                    1
-                    for item in filtered_items[: len(memory_ids)]
-                    if item.get("confidence") == "high"
+                    1 for confidence in written_confidences if confidence == "high"
                 )
                 medium_count = sum(
-                    1
-                    for item in filtered_items[: len(memory_ids)]
-                    if item.get("confidence") == "medium"
+                    1 for confidence in written_confidences if confidence == "medium"
                 )
                 quality_msg = (
                     f"，质量过滤 {quality_filtered} 条" if quality_filtered else ""

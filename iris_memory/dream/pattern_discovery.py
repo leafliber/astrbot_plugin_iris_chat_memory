@@ -189,7 +189,7 @@ class PatternDiscoveryPhase:
 输出格式（每行一个模式）：
 TYPE: <Trait/Preference/Belief/Goal/Skill 之一>
 PERSON: <用户标识，必须来自记忆片段中的[用户:xxx]标记；无法确定则不输出该模式>
-DESCRIPTION: <具体描述，如"喜欢使用孙权"而非"有角色偏好">
+DESCRIPTION: <具体描述，必须包含主体，如"张三喜欢使用孙权"而非"有角色偏好">
 EVIDENCE: <支撑记忆编号，逗号分隔>
 CONFIDENCE: <high/medium/low>
 
@@ -274,6 +274,14 @@ PERSON 必须填写，无法确定归属用户时不要输出该模式。没有�
         confidence_map = {"high": 0.9, "medium": 0.7, "low": 0.4}
         confidence = confidence_map.get(pattern.get("confidence", "low"), 0.4)
 
+        person_id = pattern.get("person", "").strip()
+        if not person_id:
+            logger.info(
+                f"模式挖掘跳过无主体记忆：'{description[:50]}' "
+                f"（PERSON 字段为空，无法关联到用户）"
+            )
+            return False
+
         new_id = await l2.add_memory(
             description,
             metadata={
@@ -283,6 +291,7 @@ PERSON 必须填写，无法确定归属用户时不要输出该模式。没有�
                 "group_id": group_key if group_key != "_all" else None,
                 "evidence": pattern.get("evidence", ""),
                 "pattern_type": node_type,
+                "user_id": person_id,
             },
             persona_id=persona_id,
         )
@@ -292,17 +301,6 @@ PERSON 必须填写，无法确定归属用户时不要输出该模式。没有�
 
         if l3 and l3.is_available:
             try:
-                # 主体校验：person_id 为空时不创建节点。
-                # 此前 person_id 为空仍创建节点，导致无主节点（如"有特定角色偏好"
-                # 不知道是谁的偏好）无法关联到用户，成为图谱中的孤儿。
-                person_id = pattern.get("person", "").strip()
-                if not person_id:
-                    logger.info(
-                        f"模式挖掘跳过无主体节点：'{description[:50]}' "
-                        f"（PERSON 字段为空，无法关联到用户）"
-                    )
-                    return True
-
                 # 创建具体类型节点
                 node = GraphNode(
                     id="",

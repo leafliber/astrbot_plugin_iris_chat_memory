@@ -13,7 +13,9 @@ Iris Chat Memory - L2 记忆库 FAISS + SQLite 适配器
 
 import asyncio
 import json
+import os
 import sqlite3
+import tempfile
 import threading
 from datetime import datetime
 from typing import Optional, List, Dict, Any, cast
@@ -699,7 +701,13 @@ class L2MemoryAdapter(Component):
                 if self._free_list:
                     faiss_idx = self._free_list.pop(0)
                 else:
-                    faiss_idx = self._index.ntotal
+                    # ntotal 是当前向量数量，不是最大 ID + 1。索引存在删除空洞且
+                    # free-list 丢失时直接使用 ntotal 可能覆盖仍在使用的向量 ID。
+                    row = self._db.execute(
+                        "SELECT MAX(faiss_idx) FROM memories"
+                    ).fetchone()
+                    max_idx = row[0] if row and row[0] is not None else -1
+                    faiss_idx = max_idx + 1
 
                 # 添加到 FAISS
                 self._index.add_with_ids(
@@ -731,21 +739,22 @@ class L2MemoryAdapter(Component):
         if self._index is None or self._index.ntotal == 0:
             return None
 
-        scores, indices = self._index.search(vector, 1)
-        if indices[0][0] < 0:
-            return None
+        similarity_threshold = float(get_config().get("l2_similarity_threshold"))
+        search_k = min(self._index.ntotal, 64)
+        scores, indices = self._index.search(vector, search_k)
 
-        score = float(scores[0][0])
-        if score < float(get_config().get("l2_similarity_threshold")):
-            return None
+        for score, faiss_idx in zip(scores[0], indices[0]):
+            if faiss_idx < 0:
+                continue
+            if float(score) < similarity_threshold:
+                break
 
-        faiss_idx = int(indices[0][0])
-        row = self._db.execute(
-            "SELECT memory_id FROM memories WHERE faiss_idx = ? AND persona_id = ?",
-            (faiss_idx, persona_id),
-        ).fetchone()
-        if row:
-            return row[0]
+            row = self._db.execute(
+                "SELECT memory_id FROM memories WHERE faiss_idx = ? AND persona_id = ?",
+                (int(faiss_idx), persona_id),
+            ).fetchone()
+            if row:
+                return row[0]
         return None
 
     # ========================================================================
@@ -1233,7 +1242,7 @@ class L2MemoryAdapter(Component):
             return False
 
     async def update_content(self, memory_id: str, new_content: str) -> bool:
-        if not self._is_available or not memory_id:
+        if not self._is_available or self._index is None or not memory_id:
             return False
 
         try:
@@ -1291,7 +1300,7 @@ class L2MemoryAdapter(Component):
     # ========================================================================
 
     async def delete_entries(self, memory_ids: List[str]) -> bool:
-        if not self._is_available or not memory_ids:
+        if not self._is_available or self._index is None or not memory_ids:
             return False
 
         try:
@@ -1519,7 +1528,7 @@ class L2MemoryAdapter(Component):
             return {"total_count": 0, "group_count": 0}
 
     async def delete_by_group(self, group_id: str, persona_id: str = "default") -> int:
-        if not self._is_available:
+        if not self._is_available or self._index is None:
             return 0
 
         try:
@@ -1557,7 +1566,7 @@ class L2MemoryAdapter(Component):
     async def delete_by_user(
         self, user_id: str, group_id: Optional[str] = None, persona_id: str = "default"
     ) -> int:
-        if not self._is_available:
+        if not self._is_available or self._index is None:
             return 0
 
         try:
@@ -1816,6 +1825,10 @@ class L2MemoryAdapter(Component):
         if not self._db and db_path.exists():
             self._db = self._open_db(db_path)
 
+        # initialize() 在迁移完成前尚未将组件标记为可用，但导出、导入和
+        # add_memory 等公共 API 都受该标志保护。迁移期间临时启用这些 API。
+        self._is_available = True
+
         old_count = self._count_db()
         if old_count == 0:
             # 空库，直接创建新索引
@@ -1830,7 +1843,12 @@ class L2MemoryAdapter(Component):
             f"开始迁移 {old_count} 条记忆（模型: {new_model}，维度: {new_dim}）"
         )
 
-        backup_path = self._persist_dir / "_migration_backup.json"
+        # delete_collection() 会删除整个持久化目录，因此迁移备份必须放在目录外。
+        backup_fd, backup_name = tempfile.mkstemp(
+            suffix="_migration_backup.json", prefix="iris_l2_"
+        )
+        os.close(backup_fd)
+        backup_path = Path(backup_name)
 
         try:
             # 1. 导出所有记忆
@@ -1950,6 +1968,7 @@ class L2MemoryAdapter(Component):
         memory_id: str,
         content: str,
         metadata: Dict[str, Any],
+        persona_id: str = "default",
     ) -> None:
         """插入或更新 SQLite 记录"""
         group_id = metadata.get("group_id")
@@ -1961,8 +1980,8 @@ class L2MemoryAdapter(Component):
         with self._lock:
             self._db.execute(
                 """INSERT OR REPLACE INTO memories
-                   (faiss_idx, memory_id, content, metadata, group_id, user_id, timestamp, kg_processed)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (faiss_idx, memory_id, content, metadata, group_id, user_id, timestamp, kg_processed, persona_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     faiss_idx,
                     memory_id,
@@ -1972,6 +1991,7 @@ class L2MemoryAdapter(Component):
                     user_id,
                     timestamp,
                     kg_processed,
+                    persona_id,
                 ),
             )
             self._db.commit()
