@@ -4,6 +4,22 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.2] - 2026-08-12
+
+### 安全
+
+- **修复图片预下载 SSRF 漏洞**：`_queue_images_to_l1_buffer` 此前用裸 `httpx.AsyncClient(follow_redirects=True)` 直接下载聊天消息中的图片 URL，未校验目标主机是否为公网，恶意群成员可诱导 bot 访问内网、云元数据（169.254.x.x）等私有资源。现统一改经新增的 `url_safety.safe_download` 下载：前置校验仅允许 http/https 且主机全部 DNS 解析地址为全局可达；下载时通过 `GlobalOnlyTransport` 在每次实际连接前（含重定向每一跳）再次强制校验，堵死 DNS rebinding 窗口。判据与 `image/parser.py` 的 LLM 解析路径完全一致，并新增回归测试（`tests/image/test_url_safety.py` 与 `TestQueueImagesSSRF`）。
+
+### 优化
+
+- **SSRF 防护抽取为共用模块**：`host_all_global`、`GlobalOnlyTransport`、`is_safe_url` 从 `image/parser.py` 抽出并新增 `safe_download` 安全下载函数，统一置于 `iris_memory/image/url_safety.py`，所有「下载聊天消息中网络资源」的代码路径共用同一判据。图片预下载因此获得与解析路径一致的 10MB 大小限制：超限图片不产生下载数据，退回 URL hash，跳过 pHash 去重 / 无效图过滤 / 本地缓存，后续 LLM 解析同样不再处理，避免大文件内存炸弹。
+
+### 修复
+
+- **`_check_url_accessible` 永远误判 URL 不可达**：httpx 流式 `Response.aread()` 不接受参数，原 `resp.aread(1024)` 调用必然抛 `TypeError` 并被外层 `except` 吞掉，导致可达性检查恒为 False。改用 `anext(resp.aiter_raw(1024), b"")` 正确读取首个流式数据块。
+- **`_resolve_image_url` 网络 URL 分支 None 安全**：由 `if image_info.has_url:`（property 无法使静态类型检查收窄 `Optional[str]`）改为 `if image_info.url:`，分支内 `image_info.url` 直接收窄为 `str`，消除访问与截取时的空值类型错误。
+- **message_hook 类型标注补全**：`get_available_component` 返回的组件按实际类型显式收窄（`ProfileStorage` / `ImageCacheManager` / `ImageQuotaManager` / `LLMManager`），`config.get` 结果按用途 cast 为目标类型（bool/int/float/str），`message_id` 经 `str()` 强制为字符串（与既有 `str(raw_msg.get(...))` 写法对齐）。沿用既有 `cast("L1Buffer", buffer)` 模式，无运行时行为变化；涉及文件的 pyright 错误清零。
+
 ## [0.2.1] - 2026-08-09
 
 ### 优化
