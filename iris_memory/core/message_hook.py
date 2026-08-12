@@ -15,7 +15,11 @@ from iris_memory.core import get_logger
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
     from iris_memory.core.components import ComponentManager
+    from iris_memory.image.cache_manager import ImageCacheManager
+    from iris_memory.image.quota_manager import ImageQuotaManager
+    from iris_memory.llm.manager import LLMManager
     from iris_memory.l1_buffer import L1Buffer
+    from iris_memory.profile.storage import ProfileStorage
 
 logger = get_logger("message_hook")
 
@@ -127,6 +131,7 @@ async def _update_profile_names(
     profile_storage = component_manager.get_available_component("profile")
     if not profile_storage:
         return
+    profile_storage = cast("ProfileStorage", profile_storage)
 
     group_key = f"group:{persona_id}:{group_id}"
     effective_group_id = (
@@ -418,15 +423,18 @@ async def _queue_images_to_l1_buffer(
     persona_id = await resolve_persona(component_manager, event)
 
     raw_msg = adapter.get_raw_message(event)
-    message_id = raw_msg.get("message_id", "")
+    message_id = str(raw_msg.get("message_id", ""))
 
-    use_phash = config.get("image_phash_enable")
-    phash_threshold = config.get("image_phash_threshold")
+    use_phash = cast("bool", config.get("image_phash_enable"))
+    phash_threshold = cast("int", config.get("image_phash_threshold"))
     use_filter = config.get("image_filter_enable")
-    filter_min_size = config.get("image_filter_min_size", 16)
-    filter_std_threshold = config.get("image_filter_std_threshold", 5.0)
+    filter_min_size = cast("int", config.get("image_filter_min_size", 16))
+    filter_std_threshold = cast("float", config.get("image_filter_std_threshold", 5.0))
 
-    cache_manager = component_manager.get_available_component("image_cache")
+    cache_manager = cast(
+        "ImageCacheManager | None",
+        component_manager.get_available_component("image_cache"),
+    )
 
     existing_hashes: list[str] = []
     if use_phash:
@@ -436,17 +444,13 @@ async def _queue_images_to_l1_buffer(
     queued_count = 0
     for image_info in images:
         # ---- 提前下载图片数据（用于 pHash、过滤、本地缓存） ----
+        # 注意：URL 来自聊天消息，必须经 SSRF 校验后下载，防止恶意用户
+        # 诱导 bot 访问内网/云元数据等私有资源（与 image/parser.py 同一判据）。
         image_data: bytes | None = None
         if image_info.url:
-            try:
-                import httpx
+            from iris_memory.image.url_safety import safe_download
 
-                async with httpx.AsyncClient(timeout=10) as client:
-                    resp = await client.get(image_info.url, follow_redirects=True)
-                    if resp.status_code < 400 and resp.content:
-                        image_data = resp.content
-            except Exception as e:
-                logger.debug(f"图片下载失败：{e}")
+            image_data = await safe_download(image_info.url, timeout=10)
 
         # ---- 哈希计算（有数据时走 pHash，否则走 URL MD5） ----
         image_hash = await compute_image_hash(
@@ -593,15 +597,24 @@ async def _parse_images_if_enabled(
 
     l1_buffer = cast("L1Buffer", buffer)
 
-    cache_manager = component_manager.get_available_component("image_cache")
-    quota_manager = component_manager.get_available_component("image_quota")
-    llm_manager = component_manager.get_available_component("llm_manager")
+    cache_manager = cast(
+        "ImageCacheManager | None",
+        component_manager.get_available_component("image_cache"),
+    )
+    quota_manager = cast(
+        "ImageQuotaManager | None",
+        component_manager.get_available_component("image_quota"),
+    )
+    llm_manager = cast(
+        "LLMManager | None",
+        component_manager.get_available_component("llm_manager"),
+    )
 
     if not llm_manager:
         logger.warning("LLM Manager 不可用，跳过图片解析")
         return
 
-    max_parse = config.get("image_max_parse_per_request")
+    max_parse = cast("int | None", config.get("image_max_parse_per_request"))
     pending_images = l1_buffer.get_images(session_id, limit=max_parse, only_pending=True)
 
     if not pending_images:
@@ -637,7 +650,7 @@ async def _parse_images_if_enabled(
             logger.warning("图片解析配额使用失败")
             return
 
-    provider = config.get("l1_buffer.image_parsing.provider", "")
+    provider = cast("str", config.get("l1_buffer.image_parsing.provider", ""))
 
     from iris_memory.image.recorder_bridge import get_recorder_bridge
 

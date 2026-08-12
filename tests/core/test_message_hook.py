@@ -950,10 +950,12 @@ class TestQueueImagesPersonaId:
                 "iris_memory.image.image_utils.compute_image_hash",
                 new=AsyncMock(return_value="testhash123456"),
             ),
-            patch("httpx.AsyncClient") as MockClient,
+            patch(
+                "iris_memory.image.url_safety.safe_download",
+                new=AsyncMock(return_value=None),
+            ),
         ):
-            # 避免 httpx 真实下载
-            MockClient.side_effect = RuntimeError("mock: no network")
+            # 避免真实网络下载
             await _queue_images_to_l1_buffer(MagicMock(), component_manager)
 
         # 核心断言：占位消息 add_message 携带 persona_id="yuki"
@@ -1015,12 +1017,81 @@ class TestQueueImagesPersonaId:
                 "iris_memory.image.image_utils.compute_image_hash",
                 new=AsyncMock(return_value="testhash123456"),
             ),
-            patch("httpx.AsyncClient") as MockClient,
+            patch(
+                "iris_memory.image.url_safety.safe_download",
+                new=AsyncMock(return_value=None),
+            ),
         ):
-            MockClient.side_effect = RuntimeError("mock: no network")
             await _queue_images_to_l1_buffer(MagicMock(), component_manager)
 
         l1_buffer.add_message.assert_not_awaited()
+
+
+class TestQueueImagesSSRF:
+    """回归：图片预下载必须经 SSRF 校验（safe_download）
+
+    历史漏洞：_queue_images_to_l1_buffer 直接用
+    httpx.AsyncClient(follow_redirects=True) 下载聊天消息中的图片 URL，
+    无私网/保留地址校验，恶意群成员可诱导 bot 访问内网/云元数据（SSRF）。
+    """
+
+    @pytest.mark.asyncio
+    async def test_download_goes_through_safe_download(self):
+        """图片 URL 必须经由 url_safety.safe_download 下载，不得裸用 httpx"""
+        from pathlib import Path
+
+        config = MagicMock()
+        config.get = lambda key, default=None: {
+            "l1_buffer.image_parsing.enable": True,
+            "image_phash_enable": False,
+            "image_filter_enable": False,
+        }.get(key, default)
+        config.data_dir = Path("/tmp/iris_test")
+
+        adapter = MagicMock()
+        adapter.get_images = MagicMock(
+            return_value=[ImageInfo(url="https://x.com/img.jpg")]
+        )
+        adapter.get_group_id = MagicMock(return_value="group_test")
+        adapter.get_user_id = MagicMock(return_value="user_1")
+        adapter.get_raw_message = MagicMock(return_value={"message_id": "mid_1"})
+        adapter.get_user_name = MagicMock(return_value="测试用户")
+
+        l1_buffer = MagicMock()
+        l1_buffer.get_all_phash_hashes = MagicMock(return_value=[])
+        l1_buffer.add_image = MagicMock()
+        l1_buffer.prepend_to_last_message = MagicMock(return_value=True)
+
+        cache_manager = MagicMock()
+        cache_manager.is_available = True
+        cache_manager.get_cache = AsyncMock(return_value=None)
+
+        component_manager = MagicMock()
+        component_manager.get_available_component = lambda name: {
+            "l1_buffer": l1_buffer,
+            "image_cache": cache_manager,
+        }.get(name)
+
+        mock_download = AsyncMock(return_value=b"\xff\xd8fake-jpeg")
+        with (
+            patch("iris_memory.config.get_config", return_value=config),
+            patch("iris_memory.platform.get_adapter", return_value=adapter),
+            patch(
+                "iris_memory.core.persona.resolve_persona",
+                new=AsyncMock(return_value="default"),
+            ),
+            patch(
+                "iris_memory.image.image_utils.compute_image_hash",
+                new=AsyncMock(return_value="testhash123456"),
+            ),
+            patch(
+                "iris_memory.image.url_safety.safe_download",
+                new=mock_download,
+            ),
+        ):
+            await _queue_images_to_l1_buffer(MagicMock(), component_manager)
+
+        mock_download.assert_awaited_once_with("https://x.com/img.jpg", timeout=10)
 
 
 class TestPrivateChatSessionKey:
