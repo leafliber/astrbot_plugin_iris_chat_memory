@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, AsyncMock, patch
 
 import numpy as np
@@ -102,6 +103,124 @@ class TestL2MemoryAdapter:
             assert "未启用" in adapter.init_error
 
     @pytest.mark.asyncio
+    async def test_initialize_uses_actual_provider_dimension(self, mock_config):
+        """Provider 配置维度错误时，以实际向量维度创建索引并可正常写入。"""
+
+        class NemotronProvider:
+            model_name = "nvidia/nemotron-3-embed-1b"
+
+            @staticmethod
+            def get_dim():
+                return 1024
+
+            @staticmethod
+            async def get_embeddings(texts):
+                return [[0.1] * 2048 for _ in texts]
+
+        context = SimpleNamespace(
+            provider_manager=SimpleNamespace(
+                embedding_provider_insts=[NemotronProvider()], inst_map={}
+            )
+        )
+        adapter = L2MemoryAdapter(context=context)
+
+        with patch(
+            "iris_memory.l2_memory.adapter.get_config", return_value=mock_config
+        ):
+            await adapter.initialize()
+            memory_id = await adapter.add_memory(
+                "Nemotron 维度回归测试", skip_dedup=True
+            )
+
+        assert adapter.is_available
+        assert adapter._embedding_dimensions == 2048
+        assert adapter._index.d == 2048
+        assert memory_id is not None
+
+    @pytest.mark.asyncio
+    async def test_initialize_migrates_loaded_index_without_dimension_meta(
+        self, mock_config
+    ):
+        """历史元数据缺少维度时，仍应按磁盘索引的真实维度触发迁移。"""
+
+        class NemotronProvider:
+            model_name = "nvidia/nemotron-3-embed-1b"
+
+            @staticmethod
+            def get_dim():
+                return 1024
+
+            @staticmethod
+            async def get_embeddings(texts):
+                return [[0.1] * 2048 for _ in texts]
+
+        context = SimpleNamespace(
+            provider_manager=SimpleNamespace(
+                embedding_provider_insts=[NemotronProvider()], inst_map={}
+            )
+        )
+        adapter = L2MemoryAdapter(context=context)
+        adapter._load_meta = Mock(return_value={})
+
+        async def load_old_index(_stored_dim):
+            adapter._index = SimpleNamespace(d=1024)
+            adapter._db = Mock()
+
+        adapter._load_existing = AsyncMock(side_effect=load_old_index)
+        adapter._migrate_on_model_change = AsyncMock(return_value=True)
+        adapter._count_db = Mock(return_value=1)
+
+        with patch(
+            "iris_memory.l2_memory.adapter.get_config", return_value=mock_config
+        ):
+            await adapter.initialize()
+
+        adapter._migrate_on_model_change.assert_awaited_once_with(
+            "provider:/nvidia/nemotron-3-embed-1b", 2048
+        )
+        assert adapter.is_available
+        assert adapter._embedding_dimensions == 2048
+
+    @pytest.mark.asyncio
+    async def test_initialize_probe_failure_is_recoverable(self, mock_config):
+        """维度探测因暂时性网络故障失败时，_try_recover 应能自动重试初始化。"""
+        call_count = {"n": 0}
+
+        class FlakyProvider:
+            model_name = "nvidia/nemotron-3-embed-1b"
+
+            @staticmethod
+            def get_dim():
+                return 1024
+
+            @staticmethod
+            async def get_embeddings(texts):
+                call_count["n"] += 1
+                if call_count["n"] == 1:
+                    raise ConnectionError(
+                        "Cannot connect to host integrate.api.nvidia.com"
+                    )
+                return [[0.1] * 2048 for _ in texts]
+
+        context = SimpleNamespace(
+            provider_manager=SimpleNamespace(
+                embedding_provider_insts=[FlakyProvider()], inst_map={}
+            )
+        )
+        adapter = L2MemoryAdapter(context=context)
+
+        with patch(
+            "iris_memory.l2_memory.adapter.get_config", return_value=mock_config
+        ):
+            await adapter.initialize()
+            assert not adapter.is_available
+            assert "Provider" in adapter._init_error
+
+            assert await adapter._try_recover()
+            assert adapter.is_available
+            assert adapter._embedding_dimensions == 2048
+
+    @pytest.mark.asyncio
     async def test_shutdown(self):
         """测试关闭适配器"""
         adapter = L2MemoryAdapter()
@@ -149,6 +268,20 @@ class TestL2MemoryAdapter:
         )
 
         assert memory_id == "mem_existing"
+
+    @pytest.mark.asyncio
+    async def test_add_memory_rejects_runtime_dimension_mismatch(
+        self, mock_faiss_adapter
+    ):
+        """运行期维度漂移应在进入 FAISS 前失败，避免裸 AssertionError。"""
+        adapter = mock_faiss_adapter
+        adapter._embed = AsyncMock(return_value=[[0.1] * 16])
+        adapter._index.add_with_ids = Mock()
+
+        memory_id = await adapter.add_memory("维度漂移", skip_dedup=True)
+
+        assert memory_id is None
+        adapter._index.add_with_ids.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_add_memory_unavailable(self):
@@ -301,6 +434,8 @@ class TestL2MemoryAdapter:
             return index
 
         adapter._create_index = Mock(side_effect=make_mock_index)
+        # 本用例使用假的 FAISS 对象；真实落盘由 persistence_resilience 覆盖。
+        adapter._write_index_atomic = Mock()
         adapter._embed = AsyncMock(return_value=[[0.2] * new_dim])
 
         ok = await adapter._migrate_on_model_change(new_model, new_dim)

@@ -195,6 +195,7 @@ class KnowledgeExtractPhase:
             if not uid:
                 continue
             user_ids.add(uid)
+            uid_nicknames.setdefault(uid, set())
             nick = mem.metadata.get("user_name")
             if nick:
                 uid_nicknames.setdefault(uid, set()).add(nick)
@@ -236,7 +237,7 @@ class KnowledgeExtractPhase:
                     except Exception as e:
                         logger.debug(f"获取用户画像失败: {uid}: {e}")
 
-        return {uid: sorted(nicks) for uid, nicks in uid_nicknames.items() if nicks}
+        return {uid: sorted(nicks) for uid, nicks in uid_nicknames.items()}
 
     def _group_memories(self, memories: list) -> dict[str, list]:
         groups: dict[str, list] = defaultdict(list)

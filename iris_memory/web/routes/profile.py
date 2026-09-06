@@ -51,6 +51,7 @@ async def get_group_profile():
         profile_storage, error = get_profile_storage()
         if error:
             return error
+        assert profile_storage is not None
 
         profile = await profile_storage.get_group_profile(group_id, persona_id)
 
@@ -70,7 +71,7 @@ async def get_group_profile():
 async def update_group_profile():
     try:
         data = await request.get_json()
-        group_id = data.get("group_id") or request.args.get("group_id")
+        group_id = (data or {}).get("group_id") or request.args.get("group_id")
 
         if not group_id:
             return jsonify({"success": False, "error": "缺少 group_id 参数"}), 400
@@ -82,6 +83,7 @@ async def update_group_profile():
         profile_storage, error = get_profile_storage()
         if error:
             return error
+        assert profile_storage is not None
 
         success = await profile_storage.update_group_profile(group_id, data, persona_id)
 
@@ -107,6 +109,7 @@ async def get_user_profile():
         profile_storage, error = get_profile_storage()
         if error:
             return error
+        assert profile_storage is not None
 
         profile = await profile_storage.get_user_profile(user_id, group_id, persona_id)
 
@@ -139,6 +142,7 @@ async def update_user_profile():
         profile_storage, error = get_profile_storage()
         if error:
             return error
+        assert profile_storage is not None
 
         success = await profile_storage.update_user_profile(
             user_id=user_id,
@@ -168,6 +172,7 @@ async def delete_group_profile():
         profile_storage, error = get_profile_storage()
         if error:
             return error
+        assert profile_storage is not None
 
         success = await profile_storage.delete_group_profile(group_id, persona_id)
 
@@ -196,6 +201,7 @@ async def delete_user_profile():
         profile_storage, error = get_profile_storage()
         if error:
             return error
+        assert profile_storage is not None
 
         success = await profile_storage.delete_user_profile(
             user_id, group_id, persona_id
@@ -217,6 +223,7 @@ async def list_group_profiles():
         profile_storage, error = get_profile_storage()
         if error:
             return error
+        assert profile_storage is not None
 
         groups = await profile_storage.list_groups(persona_id)
 
@@ -234,6 +241,7 @@ async def list_user_profiles():
         profile_storage, error = get_profile_storage()
         if error:
             return error
+        assert profile_storage is not None
         assert profile_storage is not None
 
         # 未指定 group_id 时返回所有群聊的用户（遍历 user_group_index），

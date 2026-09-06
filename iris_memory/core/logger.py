@@ -8,6 +8,7 @@ Iris Chat Memory - 日志模块
 - 线程安全的日志适配器缓存
 """
 
+from typing import Any, MutableMapping
 import logging
 import threading
 from typing import Dict
@@ -24,7 +25,9 @@ class IrisMemoryLoggerAdapter(logging.LoggerAdapter):
         # 输出: [iris-memory:config] 配置加载完成
     """
 
-    def process(self, msg: str, kwargs: dict) -> tuple[str, dict]:
+    def process(
+        self, msg: str, kwargs: MutableMapping[str, Any]
+    ) -> tuple[str, MutableMapping[str, Any]]:
         """处理日志消息，添加前缀
 
         Args:

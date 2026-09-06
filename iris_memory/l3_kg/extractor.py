@@ -38,7 +38,7 @@ class EntityExtractor:
         self.config = get_config()
 
     async def extract_from_text(
-        self, text: str, context: dict = None
+        self, text: str, context: dict | None = None
     ) -> ExtractionResult:
         """从文本中提取实体和关系
 
@@ -73,7 +73,7 @@ class EntityExtractor:
             return ExtractionResult()
 
     async def extract_from_memories(
-        self, memories: List[MemoryEntry], context: dict = None
+        self, memories: List[MemoryEntry], context: dict | None = None
     ) -> ExtractionResult:
         """从多条记忆中批量提取实体和关系
 

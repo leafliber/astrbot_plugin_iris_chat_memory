@@ -8,7 +8,7 @@ Features:
     - 支持配置保留天数
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from iris_memory.core import get_logger
 from iris_memory.config import get_config
@@ -56,7 +56,7 @@ class ImageCacheCleanupTask:
             logger.debug("图片缓存管理器不可用，跳过清理")
             return
 
-        retention_days = config.get("image_cache_retention_days", 7)
+        retention_days = cast(int, config.get("image_cache_retention_days", 7))
 
         try:
             cleaned_count = await cache_manager.cleanup_expired(retention_days)

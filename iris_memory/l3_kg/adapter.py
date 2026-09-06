@@ -13,6 +13,15 @@ from .models import GraphEdge, GraphNode
 logger = get_logger("l3_kg")
 
 
+def escape_like(value: str) -> str:
+    """转义 LIKE 通配符，配合 SQL 的 ``ESCAPE '\\'`` 子句使用。
+
+    用户关键词中的 % / _ 若不转义会扩大匹配面（如 ``%%%`` 命中全表）；
+    群号/ID 含这些字符时可能造成跨群误删。
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 class L3KGAdapter(Component):
     """SQLite 图谱适配器
 
@@ -747,7 +756,7 @@ class L3KGAdapter(Component):
             return []
 
     async def update_node_content_by_source_memory(
-        self, memory_id: str, new_content: str, new_source_memory_id: str = None
+        self, memory_id: str, new_content: str, new_source_memory_id: str | None = None
     ) -> Optional[str]:
         """根据 source_memory_id 更新节点内容
 
@@ -1260,13 +1269,26 @@ class L3KGAdapter(Component):
             return 0
 
     async def delete_by_group(self, group_id: str) -> int:
-        """删除指定群聊的所有节点和边"""
+        """删除指定群聊的所有节点和边
+
+        跨群共享节点（节点 ID 全局确定，合并写入后 group_id 列可能被
+        其他群覆盖）通过 properties.group_ids CSV 匹配：列命中或 CSV
+        含该群即删（彻底删除语义）。properties 可能存在损坏 JSON，
+        json_valid 守卫避免 json_extract 抛错导致整次删除失败。
+        """
         if not self._is_available:
             return 0
 
         try:
+            where = (
+                "(group_id = ? OR (json_valid(properties) "
+                "AND (',' || json_extract(properties, '$.group_ids') || ',') "
+                "LIKE ? ESCAPE '\\'))"
+            )
+            params: list = [group_id, f"%,{escape_like(group_id)},%"]
+
             count_row = self._db_fetchone(
-                "SELECT COUNT(*) FROM nodes WHERE group_id = ?", (group_id,)
+                f"SELECT COUNT(*) FROM nodes WHERE {where}", params
             )
             node_count = count_row[0]
 
@@ -1274,7 +1296,7 @@ class L3KGAdapter(Component):
                 logger.debug(f"群聊 {group_id} 没有知识图谱节点")
                 return 0
 
-            self._db_write("DELETE FROM nodes WHERE group_id = ?", (group_id,))
+            self._db_write(f"DELETE FROM nodes WHERE {where}", params)
 
             logger.info(f"已删除群聊 {group_id} 的 {node_count} 个节点及其关联边")
             return node_count
@@ -1306,34 +1328,50 @@ class L3KGAdapter(Component):
             logger.error(f"删除所有知识图谱失败: {e}", exc_info=True)
             return 0
 
-    async def delete_by_user(self, user_id: str, group_id: Optional[str] = None) -> int:
-        """删除与指定用户相关的节点（通过名称匹配）"""
+    async def delete_by_user(
+        self,
+        user_id: str,
+        group_id: Optional[str] = None,
+    ) -> int:
+        """删除与指定用户相关的节点
+
+        命中条件：name == user_id（归一化形态），或
+        properties.user_id == user_id（历史标记）。存量节点 properties
+        可能损坏，json_valid 守卫避免 json_extract 抛错。群过滤同样
+        覆盖跨群共享节点（group_id 列或 properties.group_ids CSV 命中
+        即删，彻底删除语义）。count 与 DELETE 使用同一 WHERE。
+        """
         if not self._is_available:
             return 0
 
         try:
-            if group_id:
-                count_row = self._db_fetchone(
-                    "SELECT COUNT(*) FROM nodes WHERE group_id = ? AND name = ?",
-                    (group_id, user_id),
-                )
-            else:
-                count_row = self._db_fetchone(
-                    "SELECT COUNT(*) FROM nodes WHERE name = ?", (user_id,)
-                )
+            group_match = (
+                "(group_id = ? OR (json_valid(properties) "
+                "AND (',' || json_extract(properties, '$.group_ids') || ',') "
+                "LIKE ? ESCAPE '\\'))"
+            )
+            user_match = (
+                "(name = ? OR (json_valid(properties) "
+                "AND json_extract(properties, '$.user_id') = ?))"
+            )
 
+            conditions = [user_match]
+            params: list = [user_id, user_id]
+            if group_id:
+                conditions.insert(0, group_match)
+                params = [group_id, f"%,{escape_like(group_id)},%", user_id, user_id]
+
+            where = " AND ".join(conditions)
+
+            count_row = self._db_fetchone(
+                f"SELECT COUNT(*) FROM nodes WHERE {where}", params
+            )
             node_count = count_row[0]
             if node_count == 0:
                 logger.debug(f"用户 {user_id} 没有知识图谱节点")
                 return 0
 
-            if group_id:
-                self._db_write(
-                    "DELETE FROM nodes WHERE group_id = ? AND name = ?",
-                    (group_id, user_id),
-                )
-            else:
-                self._db_write("DELETE FROM nodes WHERE name = ?", (user_id,))
+            self._db_write(f"DELETE FROM nodes WHERE {where}", params)
 
             logger.info(f"已删除用户 {user_id} 的 {node_count} 个知识图谱节点")
             return node_count

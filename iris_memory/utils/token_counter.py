@@ -42,7 +42,7 @@ def _try_get_encoder(encoding_name: str = "cl100k_base"):
     tiktoken 首次使用时会从远程下载编码器文件，
     网络不可用时捕获异常并永久降级为字符估算。
     """
-    if not _TIKTOKEN_AVAILABLE:
+    if not _TIKTOKEN_AVAILABLE or tiktoken is None:
         return None
 
     if encoding_name in _encoder_cache:

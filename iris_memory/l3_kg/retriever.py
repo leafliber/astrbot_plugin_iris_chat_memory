@@ -1,6 +1,6 @@
 """图谱检索器"""
 
-from typing import Optional
+from typing import Optional, cast
 
 from iris_memory.core import get_logger
 from iris_memory.config import get_config
@@ -107,9 +107,10 @@ class GraphRetriever:
         if not self.adapter.is_available:
             return [], []
 
+        timeout_ms = 1500
         try:
-            max_depth = self.config.get("l3_expansion_depth", 2)
-            timeout_ms = self.config.get("l3_timeout_ms", 1500)
+            max_depth = cast(int, self.config.get("l3_expansion_depth", 2))
+            timeout_ms = cast(int, self.config.get("l3_timeout_ms", 1500))
 
             nodes, edges = await asyncio.wait_for(
                 self.adapter.expand_from_nodes(
@@ -183,7 +184,7 @@ class GraphRetriever:
         edges: list[dict],
         max_tokens: int = 400,
         max_content_length: int = 150,
-    ) -> str:
+    ) -> tuple[str, set[str]]:
         """格式化图谱结果为上下文文本
 
         按节点类型分组展示实体，使用自然语言描述关系，

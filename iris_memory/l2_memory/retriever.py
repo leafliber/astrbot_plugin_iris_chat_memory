@@ -4,7 +4,7 @@ Iris Chat Memory - L2 记忆检索器
 提供记忆检索、写入和访问更新的高级接口。
 """
 
-from typing import List, Optional, Dict, Any, TYPE_CHECKING
+from typing import List, Optional, Dict, Any, TYPE_CHECKING, cast
 
 from iris_memory.core import get_logger, ComponentManager
 from iris_memory.config import get_config
@@ -94,7 +94,7 @@ class MemoryRetriever:
             return []
 
         if top_k is None:
-            top_k = config.get("l2_memory.top_k")
+            top_k = cast(int, config.get("l2_memory.top_k"))
 
         enable_group_isolation = config.get(
             "isolation_config.enable_group_memory_isolation"
@@ -104,7 +104,9 @@ class MemoryRetriever:
 
         results = await adapter.retrieve(query, group_id, top_k, persona_id)
 
-        relevance_threshold = config.get("l2_memory.relevance_threshold", 0.3)
+        relevance_threshold = cast(
+            float, config.get("l2_memory.relevance_threshold", 0.3)
+        )
         if relevance_threshold > 0:
             filtered = [r for r in results if r.score >= relevance_threshold]
             if len(filtered) < len(results):

@@ -5,12 +5,14 @@
 """
 
 import asyncio
-from typing import Optional, Tuple, TYPE_CHECKING
+from typing import Optional, Tuple, TYPE_CHECKING, cast
 from datetime import datetime
 
 from iris_memory.core import get_logger, ComponentManager, Component
 
 if TYPE_CHECKING:
+    from iris_memory.l1_buffer import L1Buffer
+    from iris_memory.tasks.scheduler import TaskScheduler
     from astrbot.api.star import Context, Star
 
 logger = get_logger("lifecycle")
@@ -212,13 +214,15 @@ def _inject_component_manager(component_manager: ComponentManager) -> None:
         component_manager: 组件管理器实例
     """
     # 注入到 L1Buffer
-    l1_buffer = component_manager.get_component("l1_buffer")
+    l1_buffer = cast("L1Buffer | None", component_manager.get_component("l1_buffer"))
     if l1_buffer and hasattr(l1_buffer, "set_component_manager"):
         l1_buffer.set_component_manager(component_manager)
         logger.debug("已注入 ComponentManager 到 L1Buffer")
 
     # 注入到 TaskScheduler
-    scheduler = component_manager.get_component("scheduler")
+    scheduler = cast(
+        "TaskScheduler | None", component_manager.get_component("scheduler")
+    )
     if scheduler and hasattr(scheduler, "set_component_manager"):
         scheduler.set_component_manager(component_manager)
         logger.debug("已注入 ComponentManager 到 TaskScheduler")
@@ -235,7 +239,9 @@ def _start_scheduled_tasks_immediate(component_manager: ComponentManager) -> Non
     from iris_memory.config import get_config
     from iris_memory.tasks import ImageCacheCleanupTask
 
-    scheduler = component_manager.get_component("scheduler")
+    scheduler = cast(
+        "TaskScheduler | None", component_manager.get_component("scheduler")
+    )
     if not scheduler or not scheduler.is_available:
         logger.warning("TaskScheduler 不可用，跳过启动定时任务")
         return
@@ -244,7 +250,9 @@ def _start_scheduled_tasks_immediate(component_manager: ComponentManager) -> Non
 
     if config.get("l1_buffer.image_parsing.enable"):
         cache_cleanup_task = ImageCacheCleanupTask(component_manager)
-        interval_hours = config.get("image_cache_cleanup_interval_hours", 24)
+        interval_hours = cast(
+            float, config.get("image_cache_cleanup_interval_hours", 24)
+        )
         scheduler.register_periodic_task(
             task_name="cache_cleanup",
             coro_func=cache_cleanup_task.execute,
@@ -264,7 +272,9 @@ async def _start_scheduled_tasks_deferred(component_manager: ComponentManager) -
     from iris_memory.config import get_config
     from iris_memory.dream import DreamTask
 
-    scheduler = component_manager.get_component("scheduler")
+    scheduler = cast(
+        "TaskScheduler | None", component_manager.get_component("scheduler")
+    )
     if not scheduler or not scheduler.is_available:
         logger.warning("TaskScheduler 不可用，跳过启动延迟定时任务")
         return
@@ -275,7 +285,7 @@ async def _start_scheduled_tasks_deferred(component_manager: ComponentManager) -
 
     if l2_available and config.get("scheduled_tasks.enable_dream"):
         dream_task = DreamTask(component_manager)
-        interval_hours = config.get("dream_task_interval_hours")
+        interval_hours = cast(float, config.get("dream_task_interval_hours"))
         scheduler.register_periodic_task(
             task_name="dream",
             coro_func=dream_task.execute,

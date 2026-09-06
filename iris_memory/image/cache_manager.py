@@ -5,7 +5,7 @@ Iris Chat Memory - 图片解析缓存管理器
 """
 
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional, cast
 import asyncio
 
 from iris_memory.core import Component, get_logger
@@ -230,7 +230,7 @@ class ImageCacheManager(Component):
 
         config = get_config()
         if retention_days is None:
-            retention_days = config.get("image_cache_retention_days", 7)
+            retention_days = cast(int, config.get("image_cache_retention_days", 7))
 
         cutoff_time = datetime.now() - timedelta(days=retention_days)
         cleaned_count = 0

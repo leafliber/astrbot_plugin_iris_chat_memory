@@ -188,6 +188,15 @@ class HiddenConfig:
             "group": "遗忘算法",
         },
     )
+    # 索引与 SQLite 周期对账；0 禁用，缺失向量恢复失败后自动重试。
+    l2_index_audit_interval_sec: int = field(
+        default=600,
+        metadata={
+            "description": "L2 索引与 SQLite 对账间隔秒数，缺失向量自动重试补回（0=禁用周期对账）",
+            "group": "持久化",
+        },
+    )
+
     l2_checkpoint_writes: int = field(
         default=50,
         metadata={

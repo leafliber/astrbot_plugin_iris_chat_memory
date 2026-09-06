@@ -67,6 +67,11 @@ _QUOTED_PATTERN = re.compile(r'[""「」『』]([^""「」『』]+)[""「」『�
 _CHINESE_WORD_PATTERN = re.compile(r"[一-龥]{2,6}")
 
 if TYPE_CHECKING:
+    from iris_memory.image.cache_manager import ImageCacheManager
+    from iris_memory.image.quota_manager import ImageQuotaManager
+    from iris_memory.l3_kg.adapter import L3KGAdapter
+    from iris_memory.llm import LLMManager
+    from iris_memory.profile.storage import ProfileStorage
     from astrbot.api.event import AstrMessageEvent
     from astrbot.api.provider import ProviderRequest
     from iris_memory.core.components import ComponentManager
@@ -196,8 +201,9 @@ def _inject_to_extra_user_content_parts(
 
     text_part = _TextPart(text=combined)
 
-    if hasattr(text_part, "mark_as_temp"):
-        text_part.mark_as_temp()
+    mark_as_temp = getattr(text_part, "mark_as_temp", None)
+    if callable(mark_as_temp):
+        mark_as_temp()
 
     req.extra_user_content_parts.append(text_part)
 
@@ -222,7 +228,9 @@ async def _build_image_map(
     """
     from iris_memory.image import ImageParseStatus
 
-    cache_manager = component_manager.get_component("image_cache")
+    cache_manager = cast(
+        "ImageCacheManager | None", component_manager.get_component("image_cache")
+    )
 
     all_images = l1_buffer.get_images(group_id, only_pending=False)
     if not all_images:
@@ -318,7 +326,9 @@ async def _collect_l1_context(
     """
     from iris_memory.platform import get_adapter
 
-    buffer = component_manager.get_available_component("l1_buffer")
+    buffer = cast(
+        "L1Buffer | None", component_manager.get_available_component("l1_buffer")
+    )
     if not buffer:
         logger.debug("L1 Buffer 组件不可用，跳过上下文注入")
         return ""
@@ -444,7 +454,7 @@ async def _collect_l1_context(
     lines.append("→ 较近（紧邻当前消息）")
 
     try:
-        req._l1_context_count = len(messages)
+        setattr(req, "_l1_context_count", len(messages))
     except AttributeError:
         pass
 
@@ -477,7 +487,9 @@ async def _collect_user_profile(
     if enable_auto_injection is not None and not enable_auto_injection:
         return ""
 
-    profile_storage = component_manager.get_available_component("profile")
+    profile_storage = cast(
+        "ProfileStorage | None", component_manager.get_available_component("profile")
+    )
     if not profile_storage:
         logger.debug("画像系统组件不可用，跳过画像注入")
         return ""
@@ -538,7 +550,9 @@ async def _rewrite_query_for_retrieval(
     if not config.get("l2_query_rewrite_enable", True):
         return None
 
-    llm_manager = component_manager.get_component("llm_manager")
+    llm_manager = cast(
+        "LLMManager | None", component_manager.get_component("llm_manager")
+    )
     if not llm_manager or not llm_manager.is_available:
         return None
 
@@ -548,7 +562,7 @@ async def _rewrite_query_for_retrieval(
         f"用户消息：{user_message}\n\n搜索关键词："
     )
 
-    timeout_ms = config.get("l2_query_rewrite_timeout_ms", 3000)
+    timeout_ms = cast(int, config.get("l2_query_rewrite_timeout_ms", 3000))
 
     try:
         rewritten = await asyncio.wait_for(
@@ -633,7 +647,9 @@ async def _collect_l2_memory(
 
         from iris_memory.l2_memory import MemoryRetriever
 
-        llm_manager = component_manager.get_component("llm_manager")
+        llm_manager = cast(
+            "LLMManager | None", component_manager.get_component("llm_manager")
+        )
         retriever = MemoryRetriever(component_manager, llm_manager)
 
         l2_results = await retriever.retrieve(
@@ -644,7 +660,7 @@ async def _collect_l2_memory(
 
         context_text = ""
         if l2_results:
-            max_tokens = config.get("token_budget_max_tokens", 2000)
+            max_tokens = cast(int, config.get("token_budget_max_tokens", 2000))
             trimmed = MemoryRetriever.trim_by_token_budget(l2_results, max_tokens)
             context_lines = ["## 相关记忆"]
             for i, result in enumerate(trimmed, 1):
@@ -703,7 +719,11 @@ async def _collect_l3_knowledge_graph(
         logger.debug("L3 知识图谱组件不可用，跳过图谱注入")
         return ""
 
-    kg_adapter = component_manager.get_available_component("l3_kg")
+    kg_adapter = cast(
+        "L3KGAdapter | None", component_manager.get_available_component("l3_kg")
+    )
+    if kg_adapter is None:
+        return ""
 
     adapter = get_adapter(event)
     group_id = adapter.get_group_id(event)
@@ -989,22 +1009,32 @@ async def _parse_images_if_related_mode(
     adapter = get_adapter(event)
     session_id = adapter.get_session_id(event)
 
-    buffer = component_manager.get_available_component("l1_buffer")
+    buffer = cast(
+        "L1Buffer | None", component_manager.get_available_component("l1_buffer")
+    )
     if not buffer:
         return
 
     l1_buffer = cast("L1Buffer", buffer)
 
-    cache_manager = component_manager.get_available_component("image_cache")
-    quota_manager = component_manager.get_available_component("image_quota")
-    llm_manager = component_manager.get_available_component("llm_manager")
+    cache_manager = cast(
+        "ImageCacheManager | None",
+        component_manager.get_available_component("image_cache"),
+    )
+    quota_manager = cast(
+        "ImageQuotaManager | None",
+        component_manager.get_available_component("image_quota"),
+    )
+    llm_manager = cast(
+        "LLMManager | None", component_manager.get_available_component("llm_manager")
+    )
 
     if not llm_manager:
         logger.warning("LLM Manager 不可用，跳过图片解析")
         return
 
-    max_parse = config.get("image_max_parse_per_request")
-    max_concurrent = config.get("image_max_concurrent_parse")
+    max_parse = cast(int, config.get("image_max_parse_per_request"))
+    max_concurrent = cast(int, config.get("image_max_concurrent_parse"))
 
     pending_images = l1_buffer.get_images(session_id, limit=max_parse, only_pending=True)
 
@@ -1050,7 +1080,7 @@ async def _parse_images_if_related_mode(
             logger.warning("图片解析配额使用失败")
             return
 
-    provider = config.get("l1_buffer.image_parsing.provider", "")
+    provider = cast(str, config.get("l1_buffer.image_parsing.provider", ""))
 
     from iris_memory.image.recorder_bridge import get_recorder_bridge
 
@@ -1227,9 +1257,10 @@ def _log_final_context(req: "ProviderRequest") -> None:
     else:
         log_parts.append("\n[Contexts]\n(无)")
 
-    if hasattr(req, "functions") and req.functions:
-        log_parts.append(f"\n[Functions] (共 {len(req.functions)} 个)")
-        for i, func in enumerate(req.functions, 1):
+    functions = getattr(req, "functions", None)
+    if functions:
+        log_parts.append(f"\n[Functions] (共 {len(functions)} 个)")
+        for i, func in enumerate(functions, 1):
             name = (
                 func.get("name", "unknown")
                 if isinstance(func, dict)

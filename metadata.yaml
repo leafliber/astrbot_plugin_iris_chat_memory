@@ -1,6 +1,6 @@
 name: astrbot_plugin_iris_chat_memory
 display_name: Iris 聊天陪伴记忆
 desc: 轻量级长期记忆插件，专为群聊陪伴场景深度优化，集成三层记忆架构、知识图谱、用户/群聊画像与图片理解。
-version: 0.2.2
+version: 0.3.0
 author: Leafiber
 repo: https://github.com/Leafliber/astrbot_plugin_iris_chat_memory

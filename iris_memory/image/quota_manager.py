@@ -5,7 +5,7 @@ Iris Chat Memory - 图片解析配额管理组件
 """
 
 from datetime import datetime, date
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 import asyncio
 
 from iris_memory.core import Component, get_logger
@@ -69,6 +69,8 @@ class ImageQuotaManager(Component):
             return
 
         await self._load_quota_status()
+        if self._quota_status is None:
+            raise RuntimeError("图片解析配额状态初始化失败")
 
         self._is_available = True
         logger.info(
@@ -100,7 +102,7 @@ class ImageQuotaManager(Component):
     async def _create_initial_status(self) -> None:
         """创建初始配额状态"""
         config = get_config()
-        total = config.get("l1_buffer.image_parsing.daily_quota", 200)
+        total = cast(int, config.get("l1_buffer.image_parsing.daily_quota", 200))
         today = date.today().isoformat()
 
         self._quota_status = QuotaStatus(
@@ -157,7 +159,7 @@ class ImageQuotaManager(Component):
         today = date.today().isoformat()
 
         self._quota_status.reset(
-            today, config.get("l1_buffer.image_parsing.daily_quota", 200)
+            today, cast(int, config.get("l1_buffer.image_parsing.daily_quota", 200))
         )
         await self._save_quota_status()
         logger.info(f"配额已重置：{today}")

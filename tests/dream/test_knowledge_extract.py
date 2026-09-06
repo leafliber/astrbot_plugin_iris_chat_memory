@@ -217,7 +217,8 @@ class TestKnowledgeExtractPhase:
         ]
 
         aliases = await phase._build_user_aliases(memories, "default", None)
-        assert aliases == {}
+        # 即使没有昵称，也保留稳定 ID，供提取器补打 user_id 标记。
+        assert aliases == {"u1": []}
 
     @pytest.mark.asyncio
     async def test_execute_passes_user_aliases_to_extractor(self, phase):

@@ -42,13 +42,13 @@ async def get_token_stats():
         formatted_stats = {}
         for module, stat in all_stats.items():
             formatted_stats[module] = {
-                "total_input_tokens": stat.total_input_tokens
+                "total_input_tokens": getattr(stat, "total_input_tokens")
                 if hasattr(stat, "total_input_tokens")
                 else stat.get("total_input_tokens", 0),
-                "total_output_tokens": stat.total_output_tokens
+                "total_output_tokens": getattr(stat, "total_output_tokens")
                 if hasattr(stat, "total_output_tokens")
                 else stat.get("total_output_tokens", 0),
-                "total_calls": stat.total_calls
+                "total_calls": getattr(stat, "total_calls")
                 if hasattr(stat, "total_calls")
                 else stat.get("total_calls", 0),
             }
@@ -207,13 +207,13 @@ async def get_all_stats():
                 all_stats = await llm_manager.get_all_token_stats()
                 for module, stat in all_stats.items():
                     token_stats[module] = {
-                        "total_input_tokens": stat.total_input_tokens
+                        "total_input_tokens": getattr(stat, "total_input_tokens")
                         if hasattr(stat, "total_input_tokens")
                         else stat.get("total_input_tokens", 0),
-                        "total_output_tokens": stat.total_output_tokens
+                        "total_output_tokens": getattr(stat, "total_output_tokens")
                         if hasattr(stat, "total_output_tokens")
                         else stat.get("total_output_tokens", 0),
-                        "total_calls": stat.total_calls
+                        "total_calls": getattr(stat, "total_calls")
                         if hasattr(stat, "total_calls")
                         else stat.get("total_calls", 0),
                     }

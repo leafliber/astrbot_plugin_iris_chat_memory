@@ -120,7 +120,7 @@ class TaskScheduler(Component):
     def register_periodic_task(
         self,
         task_name: str,
-        coro_func: Callable[[], Awaitable[None]],
+        coro_func: Callable[[], Awaitable[object]],
         interval_hours: float,
     ) -> None:
         """注册周期性任务
@@ -172,7 +172,7 @@ class TaskScheduler(Component):
     async def _periodic_task_wrapper(
         self,
         task_name: str,
-        coro_func: Callable[[], Awaitable[None]],
+        coro_func: Callable[[], Awaitable[object]],
         interval_hours: float,
     ) -> None:
         """周期性任务包装器
@@ -221,7 +221,7 @@ class TaskScheduler(Component):
     # =========================================================================
 
     async def schedule_task(
-        self, task_name: str, coro_func: Callable[[], Awaitable[None]]
+        self, task_name: str, coro_func: Callable[[], Awaitable[object]]
     ) -> None:
         """调度一次性任务
 
@@ -244,13 +244,16 @@ class TaskScheduler(Component):
         从队列中取出任务并串行执行，持有写锁。
         """
         logger.info("任务队列处理器已启动")
+        queue = self._task_queue
+        if queue is None:
+            return
 
         while self._running:
             try:
                 # 从队列中获取任务（带超时，避免永久阻塞）
                 try:
                     task_name, coro_func = await asyncio.wait_for(
-                        self._task_queue.get(), timeout=1.0
+                        queue.get(), timeout=1.0
                     )
                 except asyncio.TimeoutError:
                     continue

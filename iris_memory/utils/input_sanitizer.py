@@ -10,6 +10,7 @@ Iris Chat Memory - 输入清理模块
 - 插件间接口入参
 """
 
+from typing import cast
 import re
 
 from iris_memory.core import get_logger
@@ -82,7 +83,7 @@ def sanitize_input(text: str, source: str = "unknown") -> str:
     if not config.get("input_sanitizer_enable"):
         return text
 
-    max_length = config.get("input_sanitizer_max_length")
+    max_length = cast(int, config.get("input_sanitizer_max_length"))
 
     if len(text) > max_length:
         logger.warning(f"输入过长（{len(text)} 字符），来源：{source}，已截断")

@@ -8,6 +8,7 @@
 - 全量导出/导入
 """
 
+from typing import Any
 import json
 from datetime import datetime
 
@@ -338,7 +339,7 @@ async def import_all():
         import_data = body["data"]
         skip_duplicates = body.get("skip_duplicates", True)
 
-        result = {
+        result: dict[str, Any] = {
             "l2_memory": None,
             "l3_kg": None,
             "profiles": None,

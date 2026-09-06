@@ -50,7 +50,9 @@ async def compute_phash(image_data: bytes, hash_size: int = 8) -> Optional[str]:
         import numpy as np
 
         img = Image.open(io.BytesIO(image_data))
-        img = img.convert("L").resize((hash_size * 4, hash_size * 4), Image.LANCZOS)
+        img = img.convert("L").resize(
+            (hash_size * 4, hash_size * 4), Image.Resampling.LANCZOS
+        )
 
         pixels = np.array(img, dtype=np.float64)
 

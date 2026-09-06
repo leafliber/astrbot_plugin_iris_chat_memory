@@ -102,6 +102,7 @@ class SaveMemoryTool(FunctionTool[AstrAgentContext]):
 
             metadata = {
                 "user_id": user_id,
+                "active_users": user_id,
                 "user_name": user_name,
                 "group_id": group_id,
                 "timestamp": now,

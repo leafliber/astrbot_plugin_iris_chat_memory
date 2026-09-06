@@ -10,7 +10,11 @@ Iris Chat Memory - 梦境模块
 6. PruningPhase: 遗忘清洗
 """
 
+from typing import TYPE_CHECKING
 from iris_memory.core import get_logger
+
+if TYPE_CHECKING:
+    from .dream_task import DreamTask, DreamReport, DreamPhaseReport
 
 __all__ = [
     "DreamTask",

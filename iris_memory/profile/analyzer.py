@@ -5,7 +5,7 @@ Iris Chat Memory - 画像分析器
 仅保留中长期字段分析。
 """
 
-from typing import List, Dict, Union, TYPE_CHECKING
+from typing import List, Dict, Union, TYPE_CHECKING, cast
 import json
 
 from iris_memory.core import get_logger
@@ -44,7 +44,7 @@ def _truncate_messages(messages: List[str], max_chars: int) -> List[str]:
 def _get_max_chars() -> int:
     """读取画像分析单条消息最大字符数配置。"""
     try:
-        return int(get_config().get("profile_message_max_chars", 150))
+        return int(cast(int, get_config().get("profile_message_max_chars", 150)))
     except RuntimeError:
         return 150
 
@@ -154,7 +154,9 @@ class ProfileAnalyzer:
         """
         try:
             config = get_config()
-            max_messages = config.get("profile_max_messages_for_analysis", 50)
+            max_messages = cast(
+                int, config.get("profile_max_messages_for_analysis", 50)
+            )
         except RuntimeError:
             max_messages = 50
         limited_messages = messages[-max_messages:]
@@ -299,7 +301,9 @@ class ProfileAnalyzer:
         """
         try:
             config = get_config()
-            max_messages = config.get("profile_max_messages_for_user_analysis", 30)
+            max_messages = cast(
+                int, config.get("profile_max_messages_for_user_analysis", 30)
+            )
         except RuntimeError:
             max_messages = 30
         limited_messages = messages[-max_messages:]

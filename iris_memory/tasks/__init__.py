@@ -8,7 +8,12 @@ Iris Chat Memory - 定时任务模块
 注意：DreamTask 已迁移至 iris_memory.dream 顶层包。
 """
 
+from typing import TYPE_CHECKING
 from iris_memory.core import get_logger
+
+if TYPE_CHECKING:
+    from .scheduler import TaskScheduler
+    from .cache_cleanup_task import ImageCacheCleanupTask
 
 __all__ = [
     "TaskScheduler",

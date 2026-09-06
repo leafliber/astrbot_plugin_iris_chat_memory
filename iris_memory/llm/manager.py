@@ -11,7 +11,7 @@ Iris Chat Memory - LLM 调用管理器
   不必要的上下文注入（如 sampling 触发时的图片解析）。
 """
 
-from typing import Optional, Dict, List, Any, TYPE_CHECKING
+from typing import Optional, Dict, List, Any, TYPE_CHECKING, cast
 from datetime import datetime
 from collections import deque
 import asyncio
@@ -76,7 +76,7 @@ class LLMManager(Component):
 
             self._token_stats = TokenStatsManager(self._storage)
 
-            max_logs = config.get("call_log_max_entries", 100)
+            max_logs = cast(int, config.get("call_log_max_entries", 100))
             self._call_logs = deque(maxlen=max_logs)
 
             self._is_available = True
@@ -145,6 +145,12 @@ class LLMManager(Component):
         call_id = str(uuid.uuid4())
 
         try:
+            from astrbot.core.agent.message import Message
+
+            host_contexts = [
+                item if isinstance(item, Message) else Message.model_validate(item)
+                for item in (contexts or [])
+            ]
             logger.debug(
                 f"LLM 调用开始：module={module}, provider={actual_provider_id}"
             )
@@ -153,7 +159,7 @@ class LLMManager(Component):
                 self._context.llm_generate(
                     chat_provider_id=actual_provider_id,
                     prompt=prompt,
-                    contexts=contexts or [],
+                    contexts=host_contexts,
                 ),
                 timeout_sec,
             )
@@ -447,16 +453,19 @@ class LLMManager(Component):
         Returns:
             Provider 实例，不可用时返回 None
         """
+        from astrbot.core.provider.provider import Provider
+
         try:
             if hasattr(self._context, "get_provider_by_id"):
                 provider = self._context.get_provider_by_id(provider_id)
-                if provider:
+                if isinstance(provider, Provider):
                     return provider
 
             if hasattr(self._context, "provider_manager"):
                 provider_manager = self._context.provider_manager
                 if hasattr(provider_manager, "inst_map"):
-                    return provider_manager.inst_map.get(provider_id)
+                    provider = provider_manager.inst_map.get(provider_id)
+                    return provider if isinstance(provider, Provider) else None
         except Exception as e:
             logger.debug(f"获取 Provider 实例失败: {e}")
 
@@ -513,7 +522,7 @@ class LLMManager(Component):
 
         config_key = module_config_map.get(module)
         if config_key:
-            configured_provider = config.get(config_key)
+            configured_provider = cast(str | None, config.get(config_key))
             if configured_provider:
                 return configured_provider
 
@@ -541,18 +550,20 @@ class LLMManager(Component):
             if hasattr(self._context, "provider_manager"):
                 provider_manager = self._context.provider_manager
                 if hasattr(provider_manager, "get_default_provider"):
-                    default_provider = provider_manager.get_default_provider()
+                    default_provider = getattr(
+                        provider_manager, "get_default_provider"
+                    )()
                     if default_provider and hasattr(default_provider, "id"):
                         return default_provider.id
                 if hasattr(provider_manager, "providers"):
-                    providers = provider_manager.providers
+                    providers = getattr(provider_manager, "providers")
                     if providers:
                         first_provider = providers[0]
                         if hasattr(first_provider, "id"):
                             return first_provider.id
 
             if hasattr(self._context, "providers"):
-                providers = self._context.providers
+                providers = getattr(self._context, "providers")
                 if providers:
                     first_provider = providers[0]
                     if hasattr(first_provider, "id"):
