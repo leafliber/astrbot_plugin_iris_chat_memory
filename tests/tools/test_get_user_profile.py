@@ -51,8 +51,7 @@ async def test_get_user_profile(tool, mock_context, monkeypatch):
     mock_profile_storage = Mock()
     mock_profile_storage.is_available = True
 
-    mock_user_manager = Mock()
-    mock_user_manager.get_or_create = AsyncMock(return_value=mock_profile)
+    mock_profile_storage.get_user_profile = AsyncMock(return_value=mock_profile)
 
     monkeypatch.setattr(
         "iris_memory.platform.get_adapter", Mock(return_value=mock_adapter)
@@ -62,8 +61,8 @@ async def test_get_user_profile(tool, mock_context, monkeypatch):
         Mock(return_value=Mock(get_component=Mock(return_value=mock_profile_storage))),
     )
     monkeypatch.setattr(
-        "iris_memory.tools.get_profile.UserProfileManager",
-        Mock(return_value=mock_user_manager),
+        "iris_memory.core.persona.resolve_persona",
+        AsyncMock(return_value="default"),
     )
     monkeypatch.setattr(
         "iris_memory.tools.get_profile.get_config",
@@ -72,7 +71,10 @@ async def test_get_user_profile(tool, mock_context, monkeypatch):
 
     result = await tool.call(mock_context, target_type="user", target_id="user_123")
 
-    assert result is not None
+    assert "测试用户" in result
+    mock_profile_storage.get_user_profile.assert_awaited_once_with(
+        "user_123", "default", "default"
+    )
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,7 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.astr_agent_context import AstrAgentContext
 from iris_memory.core import get_logger, get_component_manager
 from iris_memory.config import get_config
-from iris_memory.profile import UserProfileManager, GroupProfileManager
+from iris_memory.profile import GroupProfileManager
 from iris_memory.profile.models import UserProfile, GroupProfile
 from iris_memory.profile.storage import ProfileStorage
 
@@ -70,9 +70,7 @@ class GetProfileTool(FunctionTool[AstrAgentContext]):
     async def _get_user_profile(self, adapter, event, user_id: str) -> str:
         if not user_id:
             user_id = adapter.get_user_id(event)
-            group_id = adapter.get_group_id(event)
-        else:
-            group_id = "default"
+        group_id = adapter.get_group_id(event) or ""
 
         if not user_id:
             return "无法获取用户ID，请手动指定target_id参数。"
@@ -95,10 +93,16 @@ class GetProfileTool(FunctionTool[AstrAgentContext]):
         manager = get_component_manager()
         persona_id = await resolve_persona(manager, event)
 
-        user_manager = UserProfileManager(profile_storage)
-        profile = await user_manager.get_or_create(
+        profile = await profile_storage.get_user_profile(
             user_id, effective_group_id, persona_id
         )
+        if profile is None:
+            scope = (
+                f"当前群（{effective_group_id}）"
+                if effective_group_id not in ("", "default")
+                else "当前画像范围"
+            )
+            return f"{scope}内尚未找到用户 {user_id} 的画像。"
 
         result = self._format_user_profile(profile)
         logger.info(f"获取用户画像: {user_id} (群聊: {effective_group_id})")
