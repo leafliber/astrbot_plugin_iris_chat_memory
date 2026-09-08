@@ -148,7 +148,10 @@ async def preprocess_llm_request(
 
     _inject_to_extra_user_content_parts(req, l1_text, profile_text, l2_text, l3_text)
 
-    _log_final_context(req)
+    try:
+        _log_final_context(req)
+    except Exception as e:
+        logger.warning(f"上下文日志输出失败，已隔离（{type(e).__name__}）")
 
 
 def _inject_to_extra_user_content_parts(
@@ -1250,7 +1253,17 @@ def _log_final_context(req: "ProviderRequest") -> None:
         log_parts.append(f"\n[Contexts] (共 {len(req.contexts)} 条)")
         for i, ctx in enumerate(req.contexts, 1):
             role = ctx.get("role", "unknown")
-            content = ctx.get("content", "")
+            content = ctx.get("content")
+            if content is None:
+                content = "(无正文，可能为工具调用消息)"
+            elif isinstance(content, list):
+                content = " ".join(
+                    str(part.get("text") or f"[{part.get('type', '内容块')}]")
+                    if isinstance(part, dict) else str(part)
+                    for part in content
+                )
+            elif not isinstance(content, str):
+                content = str(content)
             if len(content) > 200:
                 content = content[:200] + "..."
             log_parts.append(f"  [{i}] {role}: {content}")
