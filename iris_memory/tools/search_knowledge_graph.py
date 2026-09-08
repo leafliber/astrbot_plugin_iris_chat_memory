@@ -7,6 +7,7 @@ from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.astr_agent_context import AstrAgentContext
 from iris_memory.core import get_logger, get_component_manager
 from iris_memory.l3_kg.adapter import L3KGAdapter
+from iris_memory.l3_kg.tool_formatter import format_graph_results
 
 logger = get_logger("tools")
 
@@ -23,6 +24,7 @@ class SearchKnowledgeGraphTool(FunctionTool[AstrAgentContext]):
     description: str = (
         "搜索知识图谱中的实体和关系，用于查找人物关系、事件关联、概念联系等结构化知识。"
         "当你需要了解某个实体的详细信息、实体之间的关系，或者想从知识图谱中获取更多上下文时使用此工具。"
+        "关系结果包含实体名称和摘要，截断时注明展示数量。"
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -30,7 +32,7 @@ class SearchKnowledgeGraphTool(FunctionTool[AstrAgentContext]):
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "搜索关键词（实体名称或描述）",
+                    "description": "优先填写用户QQ/ID或单个实体名称、别名，也支持名称加ID。匹配名称/正文，非语义问答，请勿填写整段提问句。",
                 },
                 "label": {
                     "type": "string",
@@ -142,64 +144,6 @@ class SearchKnowledgeGraphTool(FunctionTool[AstrAgentContext]):
         expanded_edges: list[dict],
         query: str,
     ) -> str:
-        lines = [f"## 知识图谱搜索结果 - 「{query}」", ""]
-
-        lines.append(f"**匹配实体**（{len(matched_nodes)} 个）：")
-        for idx, node in enumerate(matched_nodes, 1):
-            name = node.get("name", "未知")
-            content = node.get("content", "")
-            label = node.get("label", "")
-            confidence = node.get("confidence", 0)
-            if len(content) > 150:
-                logger.debug(
-                    f"KG Tool 匹配实体内容截断：节点 '{name}'，"
-                    f"原始 {len(content)} 字符 → 150 字符"
-                )
-                content = content[:150] + "..."
-            lines.append(
-                f"{idx}. [{label}] {name}"
-                f"{f'：{content}' if content else ''}"
-                f"（置信度: {confidence:.2f}）"
-            )
-
-        if expanded_nodes:
-            additional_nodes = [
-                n
-                for n in expanded_nodes
-                if n.get("id") not in {m.get("id") for m in matched_nodes}
-            ]
-            if additional_nodes:
-                lines.append("")
-                lines.append(f"**关联实体**（{len(additional_nodes)} 个）：")
-                if len(additional_nodes) > 10:
-                    logger.debug(
-                        f"KG Tool 关联实体截断：原始 {len(additional_nodes)} 个 → 保留 10 个"
-                    )
-                for idx, node in enumerate(additional_nodes[:10], 1):
-                    name = node.get("name", "未知")
-                    content = node.get("content", "")
-                    label = node.get("label", "")
-                    if len(content) > 100:
-                        logger.debug(
-                            f"KG Tool 关联实体内容截断：节点 '{name}'，"
-                            f"原始 {len(content)} 字符 → 100 字符"
-                        )
-                        content = content[:100] + "..."
-                    lines.append(
-                        f"{idx}. [{label}] {name}{f'：{content}' if content else ''}"
-                    )
-
-        if expanded_edges:
-            lines.append("")
-            lines.append(f"**关联关系**（{len(expanded_edges)} 条）：")
-            if len(expanded_edges) > 15:
-                logger.debug(
-                    f"KG Tool 关联关系截断：原始 {len(expanded_edges)} 条 → 保留 15 条"
-                )
-            for idx, edge in enumerate(expanded_edges[:15], 1):
-                source = edge.get("source_name", edge.get("_src", "未知"))
-                target = edge.get("target_name", edge.get("_dst", "未知"))
-                relation = edge.get("relation_type", "相关")
-                lines.append(f"{idx}. {source} —[{relation}]→ {target}")
-
-        return "\n".join(lines)
+        return format_graph_results(
+            matched_nodes, expanded_nodes, expanded_edges, query
+        )

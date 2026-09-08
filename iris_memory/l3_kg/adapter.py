@@ -719,38 +719,9 @@ class L3KGAdapter(Component):
             return []
 
         try:
-            pattern = f"%{query}%"
-            conditions = ["(name LIKE ? OR content LIKE ? OR properties LIKE ?)"]
-            params: list = [pattern, pattern, pattern]
+            from .query_match import search_nodes
 
-            if label:
-                conditions.append("label = ?")
-                params.append(label)
-
-            if group_id:
-                conditions.append("group_id = ?")
-                params.append(group_id)
-
-            where = " AND ".join(conditions)
-            params.append(limit)
-
-            rows = self._db_fetchall(
-                f"""SELECT id, label, name, content, confidence, group_id
-                    FROM nodes WHERE {where} LIMIT ?""",
-                params,
-            )
-
-            return [
-                {
-                    "id": row["id"],
-                    "label": row["label"],
-                    "name": row["name"],
-                    "content": row["content"],
-                    "confidence": row["confidence"],
-                    "group_id": row["group_id"],
-                }
-                for row in rows
-            ]
+            return search_nodes(self._db_fetchall, query, label, group_id, limit)
         except Exception as e:
             logger.warning(f"搜索节点失败：{e}")
             return []
