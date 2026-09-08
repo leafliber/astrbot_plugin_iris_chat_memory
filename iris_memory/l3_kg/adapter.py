@@ -393,7 +393,7 @@ class L3KGAdapter(Component):
         max_edges: int = 200,
     ) -> tuple[list[dict], list[dict]]:
         """BFS 路径扩展检索；None 为全局范围，空字符串为私聊范围。"""
-        if not self._is_available or not node_ids:
+        if not self._is_available or not node_ids or max_nodes <= 0:
             return [], []
 
         try:
@@ -411,8 +411,13 @@ class L3KGAdapter(Component):
                     f"SELECT * FROM nodes WHERE id IN ({','.join('?' * len(node_ids))})",
                     tuple(node_ids),
                 )
-            for row in seed_rows:
-                nodes_map[row["id"]] = dict(row)
+            seeds_by_id = {row["id"]: dict(row) for row in seed_rows}
+            # 种子也占节点预算；按调用方的相关度顺序保留，过滤后再限额。
+            for node_id in dict.fromkeys(node_ids):
+                if node_id in seeds_by_id:
+                    nodes_map[node_id] = seeds_by_id[node_id]
+                    if len(nodes_map) >= max_nodes:
+                        break
 
             # 只从通过范围过滤的种子出发，不让被排除的 ID 参与后续扩展。
             visited = set(nodes_map)
@@ -421,7 +426,6 @@ class L3KGAdapter(Component):
             for _ in range(max_depth):
                 if (
                     not frontier
-                    or len(nodes_map) >= max_nodes
                     or len(edges_list) >= max_edges
                 ):
                     break
@@ -475,6 +479,14 @@ class L3KGAdapter(Component):
                     edge_key = (source_id, target_id, relation_type)
                     if edge_key in seen_edge_keys:
                         continue
+
+                    neighbor_id = target_id if source_id in frontier_set else source_id
+                    if neighbor_id not in visited:
+                        # visited 同时计入已返回和本层待读取的节点，避免整层超额。
+                        if len(visited) >= max_nodes:
+                            continue
+                        visited.add(neighbor_id)
+                        next_frontier.append(neighbor_id)
                     seen_edge_keys.add(edge_key)
 
                     edge_props = row["properties"]
@@ -500,11 +512,6 @@ class L3KGAdapter(Component):
                         }
                     )
 
-                    neighbor_id = target_id if source_id in frontier_set else source_id
-                    if neighbor_id not in visited and len(nodes_map) < max_nodes:
-                        visited.add(neighbor_id)
-                        next_frontier.append(neighbor_id)
-
                 if next_frontier:
                     ph = ",".join("?" * len(next_frontier))
                     neighbor_query = f"SELECT * FROM nodes WHERE id IN ({ph})"
@@ -523,6 +530,9 @@ class L3KGAdapter(Component):
             seen = set()
             unique_edges = []
             for e in edges_list:
+                # 邻居可能已不存在；只返回两端都有详情的关系。
+                if e["source"] not in nodes_map or e["target"] not in nodes_map:
+                    continue
                 key = f"{e['source']}-{e['relation_type']}-{e['target']}"
                 if key not in seen:
                     seen.add(key)
