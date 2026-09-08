@@ -1,9 +1,12 @@
 """图谱查询：稳定身份优先，只检索名称、正文与受控别名字段。"""
+import heapq
 import json
+import math
 import re
 import unicodedata
 
-_USER_ID = re.compile(r"(?<!\d)\d{5,20}(?!\d)")
+# 仅将独立数字识别为 ID；昵称、邮件或连字符名称中的数字属于名称。
+_USER_ID = re.compile(r"(?<![\w.@+-])[0-9]{5,20}(?![\w.@+-])")
 _TAGGED_ID = re.compile(r"^\[用户:(\d{5,20})\](?:\s|$)")
 
 
@@ -86,10 +89,28 @@ def search_nodes(fetchall, query, label=None, group_id=None, limit=20):
         params.append(group_id)
     safe_json = "CASE WHEN json_valid(properties) THEN properties ELSE '{}' END"
     uid_sql = f"CAST(json_extract({safe_json}, '$.user_id') AS TEXT)"
-    aliases_sql = " || ' ' || ".join(
+    name_fields = ["name"] + [
         f"COALESCE(CAST(json_extract({safe_json}, '$.{field}') AS TEXT),'')"
-        for field in ("aliases", "user_name", "nickname")
+        for field in ("user_name", "nickname")
+    ]
+    # 统一数组与旧版逗号分隔字符串，json_each 会解码 Unicode 转义。
+    raw_aliases = f"json_extract({safe_json}, '$.aliases')"
+    aliases_json = (
+        f"CASE json_type({safe_json}, '$.aliases') "
+        f"WHEN 'array' THEN {raw_aliases} "
+        f"WHEN 'text' THEN '[' || REPLACE(json_quote(REPLACE({raw_aliases}, "
+        "'，', ',')), ',', '\",\"') || ']' ELSE '[]' END"
     )
+
+    def match_names(value):
+        comparison = "LIKE ? ESCAPE '\\'"
+        clauses = [f"{field} {comparison}" for field in name_fields]
+        clauses.append(
+            f"EXISTS (SELECT 1 FROM json_each({aliases_json}) AS alias "
+            f"WHERE alias.type = 'text' AND TRIM(alias.value) {comparison})"
+        )
+        return "(" + " OR ".join(clauses) + ")", [_like(value)] * len(clauses)
+
     matches, match_params = [], []
     if ids and (not label or label == "Person"):
         # 有明确 QQ/用户 ID 时先定位身份，避免整句匹配和元数据泛匹配。
@@ -97,33 +118,55 @@ def search_nodes(fetchall, query, label=None, group_id=None, limit=20):
             matches.append(f"(label = 'Person' AND (name = ? OR {uid_sql} = ? OR name = ? OR name LIKE ? ESCAPE '\\'))")
             match_params.extend([uid, uid, f"[用户:{uid}]", f"[用户:{uid}] %"])
         if not label:
-            matches.append("(label <> 'Person' AND (name LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\'))")
-            match_params.extend([_like(query), _like(query)])
+            names_match, values = match_names(query)
+            matches.append(
+                f"(label <> 'Person' AND ({names_match} OR content LIKE ? ESCAPE '\\'))"
+            )
+            match_params.extend([*values, _like(query)])
     else:
         for term in list(dict.fromkeys([query, *terms])):
-            matches.append(f"(name LIKE ? ESCAPE '\\' OR ({aliases_sql}) LIKE ? ESCAPE '\\')")
-            match_params.extend([_like(term), _like(term)])
+            names_match, values = match_names(term)
+            matches.append(names_match)
+            match_params.extend(values)
         matches.append("content LIKE ? ESCAPE '\\'")
         match_params.append(_like(query))
     conditions.append("(" + " OR ".join(matches) + ")")
     params.extend(match_params)
-    rows = fetchall(
+
+    # 分批读取所有匹配候选，再按同一 rank 规则保留 top-N。
+    # 不在评分前截断候选，避免精确身份/别名被大量正文提及挤掉。
+    # ID 为主键，用已读取的末行推进游标；即使整页评分为 0 也继续。
+    base_query = (
         "SELECT id,label,name,content,confidence,group_id,properties FROM nodes WHERE "
         + " AND ".join(conditions)
-        + " ORDER BY CASE WHEN name = ? COLLATE NOCASE THEN 0 ELSE 1 END, confidence DESC, id LIMIT 2048",
-        [*params, query],
     )
     ranked = []
-    for row in rows:
-        node = dict(row)
-        node['content'] = str(node.get('content') or '')
-        score = rank(node, query, ids, terms)
-        if score:
-            try:
-                confidence = float(node.get("confidence") or 0)
-            except (ValueError, TypeError):
-                confidence = 0
-            node['confidence'] = confidence
-            ranked.append((-score, -confidence, str(node["id"]), node))
-    ranked.sort(key=lambda item: item[:3])
-    return [item[3] for item in ranked[:limit]]
+    last_id = None
+    while True:
+        page_query = base_query
+        page_params = list(params)
+        if last_id is not None:
+            page_query += " AND id > ?"
+            page_params.append(last_id)
+        rows = fetchall(page_query + " ORDER BY id LIMIT 2048", page_params)
+        if not rows:
+            break
+        for row in rows:
+            node = dict(row)
+            node['content'] = str(node.get('content') or '')
+            score = rank(node, query, ids, terms)
+            if score:
+                try:
+                    confidence = float(node.get("confidence") or 0)
+                except (ValueError, TypeError):
+                    confidence = 0
+                if not math.isfinite(confidence):
+                    confidence = 0
+                node['confidence'] = confidence
+                ranked.append((-score, -confidence, str(node["id"]), node))
+        # 最多仅持有一批候选和 limit 个保留结果，不累积整个图谱。
+        ranked = heapq.nsmallest(limit, ranked, key=lambda item: item[:3])
+        last_id = rows[-1]["id"]
+        if len(rows) < 2048:
+            break
+    return [item[3] for item in ranked]

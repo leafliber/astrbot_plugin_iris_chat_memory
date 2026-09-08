@@ -392,18 +392,16 @@ class L3KGAdapter(Component):
         max_nodes: int = 100,
         max_edges: int = 200,
     ) -> tuple[list[dict], list[dict]]:
-        """BFS 路径扩展检索"""
-        if not self._is_available:
+        """BFS 路径扩展检索；None 为全局范围，空字符串为私聊范围。"""
+        if not self._is_available or not node_ids:
             return [], []
 
         try:
-            visited = set(node_ids)
-            frontier = list(node_ids)
             nodes_map: dict[str, dict] = {}
             edges_list: list[dict] = []
 
             # 种子节点也必须按 group_id 过滤，否则跨群节点作为种子泄漏
-            if group_id:
+            if group_id is not None:
                 seed_rows = self._db_fetchall(
                     f"SELECT * FROM nodes WHERE id IN ({','.join('?' * len(node_ids))}) AND group_id = ?",
                     (*node_ids, group_id),
@@ -416,6 +414,10 @@ class L3KGAdapter(Component):
             for row in seed_rows:
                 nodes_map[row["id"]] = dict(row)
 
+            # 只从通过范围过滤的种子出发，不让被排除的 ID 参与后续扩展。
+            visited = set(nodes_map)
+            frontier = list(nodes_map)
+
             for _ in range(max_depth):
                 if (
                     not frontier
@@ -426,7 +428,7 @@ class L3KGAdapter(Component):
 
                 placeholders = ",".join("?" * len(frontier))
 
-                if group_id:
+                if group_id is not None:
                     query = f"""
                         SELECT e.source_id, e.target_id, e.relation_type,
                                e.weight, e.confidence, e.access_count,
@@ -505,14 +507,16 @@ class L3KGAdapter(Component):
 
                 if next_frontier:
                     ph = ",".join("?" * len(next_frontier))
-                    neighbor_rows = self._db_fetchall(
-                        f"SELECT * FROM nodes WHERE id IN ({ph})",
-                        tuple(next_frontier),
-                    )
+                    neighbor_query = f"SELECT * FROM nodes WHERE id IN ({ph})"
+                    neighbor_params = list(next_frontier)
+                    if group_id is not None:
+                        neighbor_query += " AND group_id = ?"
+                        neighbor_params.append(group_id)
+                    neighbor_rows = self._db_fetchall(neighbor_query, neighbor_params)
                     for node_row in neighbor_rows:
                         nodes_map[node_row["id"]] = dict(node_row)
 
-                frontier = next_frontier
+                frontier = [node_id for node_id in next_frontier if node_id in nodes_map]
 
             nodes = list(nodes_map.values())
 
